@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Installs the hooks that a config file lists into Claude Code and Codex, and removes them.
 
-Usage: agent_hooks.py install|remove CONFIG [--project] [--agent claude|codex]
+Usage: agent-hooks install|remove CONFIG [--project] [--agent claude|codex]
 """
 
 import argparse

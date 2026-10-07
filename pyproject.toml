@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-hooks"
+version = "0.1.0"
+description = "Installs the hooks that a config file lists into Claude Code and Codex, and removes them"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+agent-hooks = "agent_hooks:main"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["agent_hooks.py"]

@@ -2,16 +2,23 @@
 
 Installs the hooks that a config file lists into Claude Code and Codex, and removes them.
 
-```sh
-agent_hooks.py install path/to/agent-hooks.json
-agent_hooks.py remove path/to/agent-hooks.json
-```
-
-To run it from any repository, link it into a folder on your `PATH`:
+Install it once from this folder with [uv](https://docs.astral.sh/uv/), which puts
+`agent-hooks` on your `PATH`:
 
 ```sh
-ln -s <repo>/agent-hooks/agent_hooks.py ~/.local/bin/agent-hooks
+uv tool install --editable .
+agent-hooks install path/to/agent-hooks.json
+agent-hooks remove path/to/agent-hooks.json
 ```
+
+Or run it without installing, for example from a folder next to this one:
+
+```sh
+uvx --with-editable ../agent-hooks agent-hooks install agent-hooks.json
+```
+
+Both run the code in this folder, so an edit takes effect at once. `uvx --from` would keep
+running the copy it built the first time.
 
 ## Config
 
