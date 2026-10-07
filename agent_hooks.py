@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Installs the hooks that a config file lists into Claude Code and Codex, and removes them.
+
+Usage: agent_hooks.py install|remove CONFIG [--project] [--agent claude|codex]
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+
+AGENTS = ("claude", "codex")
+PROJECT_FILES = {"claude": ".claude/settings.json", "codex": ".codex/hooks.json"}
+# Codex runs a hook in the folder the session started in, which can be below the project root.
+PROJECT_ROOT = '"$(git rev-parse --show-toplevel)"'
+
+
+def hook_file(agent, project):
+    if project:
+        return project / PROJECT_FILES[agent]
+    if agent == "claude":
+        return Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / "settings.json"
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "hooks.json"
+
+
+def git_root(folder):
+    result = subprocess.run(["git", "-C", str(folder), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if result.returncode:
+        sys.exit(f"--project needs the config inside a git repository: {result.stderr.strip()}")
+    return Path(result.stdout.strip())
+
+
+def config_dir(folder, project):
+    if not project:
+        return shlex.quote(str(folder))
+    rel = folder.relative_to(project)
+    return PROJECT_ROOT + ("" if rel == Path() else "/" + shlex.quote(str(rel)))
+
+
+def build(config, agent, folder, tag):
+    events = {}
+    for block in (config.get("hooks", {}), config.get(agent, {})):
+        for event, entries in block.items():
+            for entry in entries:
+                handler = {"type": "command", **entry}
+                matcher = handler.pop("matcher", None)
+                handler["command"] = handler["command"].replace("{dir}", folder).replace("{agent}", agent) + tag
+                group = {} if matcher is None else {"matcher": matcher}
+                group["hooks"] = [handler]
+                events.setdefault(event, []).append(group)
+    return events
+
+
+def strip(hooks, tag):
+    kept = {}
+    for event, groups in hooks.items():
+        groups = [{**g, "hooks": [h for h in g["hooks"] if not h.get("command", "").endswith(tag)]} for g in groups]
+        groups = [g for g in groups if g["hooks"]]
+        if groups:
+            kept[event] = groups
+    return kept
+
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    if path.exists():
+        shutil.copymode(path, tmp)
+    os.replace(tmp, path)
+
+
+def update(path, tag, new):
+    """Replaces the hooks carrying the tag with the new ones; returns whether the file changed."""
+    # Writing through a symlink keeps a settings file that lives elsewhere, such as in dotfiles.
+    path = path.resolve()
+    data = json.loads(path.read_text()) if path.exists() else {}
+    old = data.get("hooks", {})
+    hooks = strip(old, tag)
+    for event, groups in new.items():
+        hooks.setdefault(event, []).extend(groups)
+    if hooks == old:
+        return False
+    if hooks:
+        data["hooks"] = hooks
+    else:
+        data.pop("hooks", None)
+    write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Installs the hooks a config file lists into Claude Code and Codex, and removes them.")
+    parser.add_argument("action", choices=["install", "remove"])
+    parser.add_argument("config", type=Path)
+    parser.add_argument("--project", action="store_true", help="use the hook files of the git repository that holds the config, for everyone who clones it")
+    parser.add_argument("--agent", choices=AGENTS, help="only this agent")
+    args = parser.parse_args()
+
+    path = args.config.resolve()
+    config = json.loads(path.read_text())
+    if "name" not in config or set(config) - {"name", "hooks", *AGENTS}:
+        sys.exit(f"{path}: needs a name, and allows only hooks, claude and codex besides it")
+    project = git_root(path.parent) if args.project else None
+    # Marks every installed command, so remove finds it even after the config changed.
+    tag = f" # agent-hooks: {config['name']}"
+    folder = config_dir(path.parent, project)
+    for agent in [args.agent] if args.agent else AGENTS:
+        hooks = build(config, agent, folder, tag) if args.action == "install" else {}
+        target = hook_file(agent, project)
+        changed = update(target, tag, hooks)
+        print(f"{agent}: {'updated' if changed else 'unchanged'} {target}")
+        if agent == "codex" and changed and hooks:
+            print("codex: asks you to review the new hooks at its next start")
+
+
+if __name__ == "__main__":
+    main()
