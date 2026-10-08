@@ -42,6 +42,17 @@ running the copy it built the first time.
   `{agent}` becomes `claude` or `codex`.
 - `matcher` and `command` mean what they mean in each agent's own hook files. Other
   fields, such as `timeout`, are copied as they are.
+- `files`, if given, lists the files the hooks need, as paths inside the config's folder.
+
+## Copies
+
+With `files` in the config, `install` copies those files to `~/.claude/agent-hooks/<name>/`
+and `~/.codex/agent-hooks/<name>/`, and `{dir}` points there. The hooks keep working when
+the config's folder moves or is deleted. Run `install` again to bring in changed files;
+`remove` deletes the copies.
+
+`--editable` skips the copies and runs the hooks from the config's folder, so an edit takes
+effect at once. It also deletes copies left by an earlier `install`. `--project` never copies.
 
 ## Where hooks go
 
@@ -60,7 +71,8 @@ after you trust the project.
 
 Each installed command ends with `# agent-hooks: <name>`. `install` replaces the commands
 with that mark and `remove` deletes them, so a hook dropped from the config disappears on
-the next run. Keep `name` the same once installed. Hooks without the mark, such as ones
+the next run. Keep `name` the same once installed. It is also the copies' folder name, so it
+can't hold `/`. Hooks without the mark, such as ones
 you added by hand, are left alone, and the rest of each file is kept.
 
 Codex asks you to review new or changed hooks at its next start. It remembers approvals

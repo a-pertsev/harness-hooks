@@ -13,7 +13,7 @@ TOOL = Path(__file__).with_name("agent_hooks.py")
 class AgentHooksTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name).resolve()
+        self.root = root = Path(self.tmp.name).resolve()
         self.repo = root / "repo"
         self.tools = self.repo / "tools"
         self.tools.mkdir(parents=True)
@@ -48,6 +48,12 @@ class AgentHooksTest(unittest.TestCase):
     def run_hook(self, command, cwd, log, env=None):
         subprocess.run(["/bin/sh", "-c", command], cwd=cwd, env={**os.environ, **(env or {})}, check=True)
         return log.read_text().splitlines()[-1]
+
+    def copy_dir(self, agent):
+        return self.root / agent / "agent-hooks" / "demo"
+
+    def write_copied_config(self, files):
+        self.write_config({"name": "demo", "files": files, "hooks": {"Stop": [{"command": "{dir}/log.sh {agent} Stop"}]}})
 
     def test_install_adds_shared_and_agent_hooks_that_run(self):
         self.run_tool("install", str(self.config))
@@ -108,13 +114,80 @@ class AgentHooksTest(unittest.TestCase):
         self.assertFalse(self.claude_file.exists())
         self.assertFalse(self.codex_file.exists())
 
+    def test_install_copies_listed_files_so_hooks_survive_the_config_folder(self):
+        self.write_copied_config(["log.sh"])
+
+        self.run_tool("install", str(self.config))
+        shutil.rmtree(self.repo)
+
+        for path, agent in [(self.claude_file, "claude"), (self.codex_file, "codex")]:
+            [(_, stop)] = self.commands(path)["Stop"]
+            self.assertEqual(self.run_hook(stop, "/", self.copy_dir(agent) / "log"), f"{agent} Stop")
+
+    def test_install_again_replaces_the_copy(self):
+        (self.tools / "notes.txt").write_text("old")
+        self.write_copied_config(["log.sh", "notes.txt"])
+        self.run_tool("install", str(self.config))
+        (self.tools / "log.sh").write_text('#!/bin/sh\necho new "$@" >> "$(dirname "$0")/log"\n')
+        self.write_copied_config(["log.sh"])
+
+        self.run_tool("install", str(self.config))
+
+        [(_, stop)] = self.commands(self.claude_file)["Stop"]
+        self.assertEqual(self.run_hook(stop, "/", self.copy_dir("claude") / "log"), "new claude Stop")
+        self.assertEqual(sorted(p.name for p in self.copy_dir("claude").parent.iterdir()), ["demo"])
+        self.assertFalse((self.copy_dir("claude") / "notes.txt").exists())
+
+    def test_remove_deletes_the_copy(self):
+        self.write_copied_config(["log.sh"])
+        self.run_tool("install", str(self.config))
+
+        self.run_tool("remove", str(self.config))
+
+        self.assertEqual(json.loads(self.claude_file.read_text()), {})
+        self.assertFalse(self.copy_dir("claude").exists())
+        self.assertFalse(self.copy_dir("codex").exists())
+
+    def test_editable_install_runs_from_the_config_folder_and_drops_an_earlier_copy(self):
+        self.write_copied_config(["log.sh"])
+        self.run_tool("install", str(self.config))
+
+        self.run_tool("install", str(self.config), "--editable")
+
+        self.assertFalse(self.copy_dir("claude").exists())
+        [(_, stop)] = self.commands(self.claude_file)["Stop"]
+        self.assertEqual(self.run_hook(stop, "/", self.tools / "log"), "claude Stop")
+
+    def test_file_that_is_not_in_the_config_folder_is_refused(self):
+        for file in ["missing.sh", "../tools/log.sh", str(self.tools / "log.sh")]:
+            with self.subTest(file=file):
+                self.write_copied_config([file])
+
+                result = self.run_tool("install", str(self.config), check=False)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("is not a file", result.stderr)
+                self.assertFalse(self.claude_file.exists())
+
+    def test_name_that_leads_out_of_its_folder_is_refused(self):
+        # With this folder present, the copy folder of a name ".." is the agent's whole home.
+        (self.root / "claude" / "agent-hooks").mkdir(parents=True)
+        self.claude_file.write_text("{}")
+        self.write_config({"name": ".."})
+
+        result = self.run_tool("remove", str(self.config), check=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.claude_file.exists())
+
     def test_project_install_runs_scripts_in_a_clone_from_any_of_its_folders(self):
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        self.write_config({**json.loads(self.config.read_text()), "files": ["log.sh"]})
 
         self.run_tool("install", str(self.config), "--project")
 
-        self.assertFalse(self.claude_file.exists())
-        self.assertFalse(self.codex_file.exists())
+        self.assertFalse(self.claude_file.parent.exists())
+        self.assertFalse(self.codex_file.parent.exists())
         clone = Path(self.tmp.name).resolve() / "clone"
         shutil.copytree(self.repo, clone)
         (clone / "sub").mkdir()
