@@ -142,7 +142,7 @@ def main():
         copy_dir = target.parent / "harness-hooks" / name
         if copying:
             copy(path.parent, files, copy_dir)
-            print(f"{agent}: copied {len(files)} files to {copy_dir}")
+            print(f"{agent}: copied {', '.join(files)} to {copy_dir}")
         hooks = build(config, agent, shlex.quote(str(copy_dir)) if copying else folder, tag) if args.action == "install" else {}
         changed = update(target, tag, hooks)
         print(f"{agent}: {'updated' if changed else 'unchanged'} {target}")
