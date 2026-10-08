@@ -1,0 +1,24 @@
+{
+  "name": "langfuse",
+  "files": ["claude_langfuse_hook.py", "codex_langfuse_hook.py"],
+  "inputs": {
+    "public_key": {"ask": "Langfuse public key (pk-lf-…)"},
+    "secret_key": {"ask": "Langfuse secret key (sk-lf-…)", "secret": true},
+    "login": {"ask": "Your login"}
+  },
+  "env": {
+    "TRACE_TO_LANGFUSE": "true",
+    "LANGFUSE_HOST": "https://langfuse.example.com",
+    "LANGFUSE_PUBLIC_KEY": "{public_key}",
+    "LANGFUSE_SECRET_KEY": "{secret_key}",
+    "LANGFUSE_USER_ID": "{login}"
+  },
+  "hooks": {
+    "claude": {
+      "Stop": [{"command": "uv run {dir}/claude_langfuse_hook.py"}]
+    },
+    "codex": {
+      "Stop": [{"command": "uv run {dir}/codex_langfuse_hook.py"}]
+    }
+  }
+}

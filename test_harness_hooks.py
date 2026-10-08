@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 
+import tomlkit
+
 TOOL = Path(__file__).with_name("harness_hooks.py")
 
 
@@ -24,13 +26,18 @@ class HarnessHooksTest(unittest.TestCase):
         self.config = self.tools / "harness-hooks.json"
         self.write_config({
             "name": "demo",
-            "hooks": {"Stop": [{"command": "{dir}/log.sh {agent} Stop", "timeout": 5}]},
-            "claude": {"PreToolUse": [{"matcher": "AskUserQuestion", "command": "{dir}/log.sh claude ask"}]},
-            "codex": {"PreToolUse": [{"matcher": "^request_user_input", "command": "{dir}/log.sh codex ask"}]},
+            "hooks": {
+                "Stop": [{"command": "{dir}/log.sh {agent} Stop", "timeout": 5}],
+                "claude": {"PreToolUse": [{"matcher": "AskUserQuestion", "command": "{dir}/log.sh claude ask"}]},
+                "codex": {"PreToolUse": [{"matcher": "^request_user_input", "command": "{dir}/log.sh codex ask"}]},
+            },
         })
-        self.claude_file = root / "claude" / "settings.json"
-        self.codex_file = root / "codex" / "hooks.json"
-        self.env = {**os.environ, "CLAUDE_CONFIG_DIR": str(root / "claude"), "CODEX_HOME": str(root / "codex")}
+        # Spaces in the agents' folders check that every path the tool writes into a command is quoted.
+        self.homes = {"claude": root / "claude home", "codex": root / "codex home"}
+        self.claude_file = self.homes["claude"] / "settings.json"
+        self.codex_file = self.homes["codex"] / "hooks.json"
+        self.codex_config = self.homes["codex"] / "config.toml"
+        self.env = {**os.environ, "CLAUDE_CONFIG_DIR": str(self.homes["claude"]), "CODEX_HOME": str(self.homes["codex"])}
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -38,8 +45,15 @@ class HarnessHooksTest(unittest.TestCase):
     def write_config(self, config):
         self.config.write_text(json.dumps(config))
 
-    def run_tool(self, *args, check=True):
-        return subprocess.run([sys.executable, TOOL, *args], text=True, capture_output=True, env=self.env, check=check)
+    def run_tool(self, *args, check=True, answers=None):
+        env = {**self.env, **{f"HARNESS_HOOKS_{key.upper()}": value for key, value in (answers or {}).items()}}
+        return subprocess.run([sys.executable, TOOL, *args], text=True, capture_output=True, env=env, stdin=subprocess.DEVNULL, check=check)
+
+    def claude_settings(self):
+        return json.loads(self.claude_file.read_text())
+
+    def codex_settings(self):
+        return tomlkit.parse(self.codex_config.read_text()).unwrap()
 
     def commands(self, path):
         hooks = json.loads(path.read_text())["hooks"]
@@ -50,7 +64,7 @@ class HarnessHooksTest(unittest.TestCase):
         return log.read_text().splitlines()[-1]
 
     def copy_dir(self, agent):
-        return self.root / agent / "harness-hooks" / "demo"
+        return self.homes[agent] / "harness-hooks" / "demo"
 
     def write_copied_config(self, files):
         self.write_config({"name": "demo", "files": files, "hooks": {"Stop": [{"command": "{dir}/log.sh {agent} Stop"}]}})
@@ -166,12 +180,12 @@ class HarnessHooksTest(unittest.TestCase):
                 result = self.run_tool("install", str(self.config), check=False)
 
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("is not a file", result.stderr)
+                self.assertIn("must be an existing file", result.stderr)
                 self.assertFalse(self.claude_file.exists())
 
     def test_name_that_leads_out_of_its_folder_is_refused(self):
         # With this folder present, the copy folder of a name ".." is the agent's whole home.
-        (self.root / "claude" / "harness-hooks").mkdir(parents=True)
+        (self.homes["claude"] / "harness-hooks").mkdir(parents=True)
         self.claude_file.write_text("{}")
         self.write_config({"name": ".."})
 
@@ -216,6 +230,183 @@ class HarnessHooksTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.claude_file.exists())
+
+    def test_agent_hooks_outside_hooks_are_refused(self):
+        self.write_config({"name": "demo", "claude": {"Stop": [{"command": "x"}]}})
+
+        result = self.run_tool("install", str(self.config), check=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("allows only", result.stderr)
+        self.assertFalse(self.claude_file.exists())
+
+
+    def test_install_writes_env_and_settings_and_keeps_the_rest(self):
+        self.write_config({
+            "name": "demo",
+            "env": {"HOST": "h"},
+            "settings": {"claude": {"model": "opus"}, "codex": {"otel": {"enabled": True}}},
+        })
+        self.claude_file.parent.mkdir()
+        self.claude_file.write_text(json.dumps({"theme": "dark", "env": {"MINE": "1"}}))
+        self.codex_config.parent.mkdir()
+        self.codex_config.write_text('model = "gpt"  # mine\n\n[projects."/a"]\ntrust_level = "trusted"\n')
+
+        self.run_tool("install", str(self.config))
+        first = self.claude_file.read_text(), self.codex_config.read_text()
+        out = self.run_tool("install", str(self.config)).stdout
+
+        self.assertEqual(self.claude_settings(), {"theme": "dark", "env": {"MINE": "1", "HOST": "h"}, "model": "opus"})
+        self.assertEqual(self.codex_settings()["otel"], {"enabled": True})
+        self.assertEqual(self.codex_settings()["projects"], {"/a": {"trust_level": "trusted"}})
+        self.assertIn('model = "gpt"  # mine', first[1])
+        # The Codex Langfuse hook reads its keys from this exact table form.
+        self.assertIn('[shell_environment_policy.set]\nHOST = "h"', first[1])
+        self.assertEqual((self.claude_file.read_text(), self.codex_config.read_text()), first)
+        self.assertIn(f"codex: unchanged {self.codex_config}", out)
+
+    def write_asking_config(self):
+        self.write_config({
+            "name": "demo",
+            "inputs": {"token": {"ask": "Token", "secret": True, "file": True}, "login": {"ask": "Login"}},
+            "env": {"USER_ID": "user={login}"},
+            "settings": {
+                "claude": {"apiKeyHelper": "cat {token}"},
+                "codex": {"auth": {"command": "cat", "args": ["{token}"]}},
+            },
+        })
+
+    def token_from_each_agent(self):
+        helper = subprocess.run(["/bin/sh", "-c", self.claude_settings()["apiKeyHelper"]], capture_output=True, text=True, check=True)
+        auth = self.codex_settings()["auth"]
+        command = subprocess.run([auth["command"], *auth["args"]], capture_output=True, text=True, check=True)
+        return helper.stdout, command.stdout
+
+    def test_answers_fill_values_and_a_file_answer_stays_out_of_settings(self):
+        self.write_asking_config()
+
+        self.run_tool("install", str(self.config), answers={"token": "t0k", "login": "ivan"})
+
+        self.assertEqual(self.token_from_each_agent(), ("t0k", "t0k"))
+        self.assertEqual(self.claude_settings()["env"]["USER_ID"], "user=ivan")
+        self.assertEqual(self.codex_settings()["shell_environment_policy"]["set"]["USER_ID"], "user=ivan")
+        self.assertNotIn("t0k", self.claude_file.read_text() + self.codex_config.read_text())
+        token_file = Path(self.codex_settings()["auth"]["args"][0])
+        self.assertEqual(token_file.stat().st_mode & 0o777, 0o600)
+
+    def test_install_again_keeps_answers_and_ask_replaces_them(self):
+        self.write_asking_config()
+        self.run_tool("install", str(self.config), answers={"token": "t0k", "login": "ivan"})
+
+        out = self.run_tool("install", str(self.config)).stdout
+
+        self.assertIn("claude: unchanged", out)
+        self.assertEqual(self.token_from_each_agent(), ("t0k", "t0k"))
+
+        self.run_tool("install", str(self.config), "--ask", answers={"token": "n3w", "login": "petr"})
+
+        self.assertEqual(self.token_from_each_agent(), ("n3w", "n3w"))
+        self.assertEqual(self.claude_settings()["env"]["USER_ID"], "user=petr")
+
+    def test_missing_answer_without_a_terminal_stops_before_writing(self):
+        self.write_asking_config()
+
+        result = self.run_tool("install", str(self.config), check=False, answers={"token": "t0k"})
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HARNESS_HOOKS_LOGIN", result.stderr)
+        self.assertFalse(self.claude_file.parent.exists())
+
+    def test_values_set_by_hand_are_left_alone(self):
+        self.write_config({"name": "demo", "inputs": {"key": {"ask": "Key"}}, "env": {"HOST": "h", "KEY": "{key}"}})
+        self.claude_file.parent.mkdir()
+        self.claude_file.write_text(json.dumps({"env": {"HOST": "mine", "KEY": "pasted"}}))
+
+        out = self.run_tool("install", str(self.config), "--agent", "claude").stdout
+        self.run_tool("remove", str(self.config), "--agent", "claude")
+
+        self.assertIn("env.HOST", out)
+        self.assertEqual(self.claude_settings(), {"env": {"HOST": "mine", "KEY": "pasted"}})
+
+    def test_update_and_remove_take_out_only_unedited_values_of_their_config(self):
+        self.write_config({"name": "demo", "env": {"A": "1", "B": "2", "C": "3"}})
+        self.run_tool("install", str(self.config), "--agent", "claude")
+        self.claude_file.write_text(json.dumps({"env": {"A": "1", "B": "edited", "C": "3"}}))
+        self.write_config({"name": "demo", "env": {"A": "1"}})
+
+        out = self.run_tool("install", str(self.config), "--agent", "claude").stdout
+
+        self.assertEqual(self.claude_settings(), {"env": {"A": "1", "B": "edited"}})
+        self.assertIn("env.B", out)
+
+        self.run_tool("remove", str(self.config), "--agent", "claude")
+
+        self.assertEqual(self.claude_settings(), {"env": {"B": "edited"}})
+
+    def test_a_value_two_configs_share_stays_until_both_are_removed(self):
+        other = self.tools / "other.json"
+        other.write_text(json.dumps({"name": "other", "env": {"NO_PROXY": "x"}}))
+        self.write_config({"name": "demo", "env": {"NO_PROXY": "x"}})
+        self.run_tool("install", str(self.config), str(other))
+
+        self.run_tool("remove", str(self.config))
+
+        self.assertEqual(self.claude_settings()["env"], {"NO_PROXY": "x"})
+        self.assertEqual(self.codex_settings()["shell_environment_policy"]["set"], {"NO_PROXY": "x"})
+
+        self.run_tool("remove", str(other))
+
+        self.assertNotIn("env", self.claude_settings())
+        self.assertEqual(self.codex_settings(), {})
+
+    def test_a_config_whose_answer_is_unknown_does_not_keep_another_configs_value(self):
+        other = self.tools / "other.json"
+        other.write_text(json.dumps({"name": "other", "inputs": {"b": {"ask": "B"}}, "env": {"KEY": "{b}"}}))
+        self.write_config({"name": "demo", "inputs": {"a": {"ask": "A"}}, "env": {"KEY": "{a}"}})
+        self.run_tool("install", str(self.config), "--agent", "claude", answers={"a": "x"})
+        self.run_tool("install", str(other), "--agent", "claude")
+
+        self.run_tool("remove", str(self.config), "--agent", "claude")
+
+        self.assertNotIn("env", self.claude_settings())
+
+    def test_agents_limits_a_config_and_install_takes_it_out_of_a_dropped_agent(self):
+        self.write_config({"name": "demo", "env": {"A": "1"}, "hooks": {"Stop": [{"command": "{dir}/log.sh"}]}})
+        self.run_tool("install", str(self.config))
+        self.write_config({"name": "demo", "agents": ["claude"], "env": {"A": "1"}, "hooks": {"Stop": [{"command": "{dir}/log.sh"}]}})
+
+        self.run_tool("install", str(self.config))
+
+        self.assertEqual(self.claude_settings()["env"], {"A": "1"})
+        self.assertEqual(json.loads(self.codex_file.read_text()), {})
+        self.assertEqual(self.codex_settings(), {})
+
+    def test_installing_one_config_leaves_values_of_another_alone(self):
+        other = self.tools / "other.json"
+        other.write_text(json.dumps({"name": "other", "env": {"PROXY": "p"}}))
+        self.write_config({"name": "demo", "env": {"BASE_URL": "u"}})
+        self.run_tool("install", str(self.config))
+
+        self.run_tool("install", str(other))
+
+        self.assertEqual(self.claude_settings()["env"], {"BASE_URL": "u", "PROXY": "p"})
+
+    def test_configs_in_one_run_need_different_names(self):
+        other = self.tools / "other.json"
+        other.write_text(json.dumps({"name": "demo"}))
+
+        result = self.run_tool("install", str(self.config), str(other), check=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.claude_file.exists())
+
+    def test_project_install_with_settings_is_refused(self):
+        self.write_config({"name": "demo", "env": {"A": "1"}})
+
+        result = self.run_tool("install", str(self.config), "--project", check=False)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("only hooks", result.stderr)
 
 
 if __name__ == "__main__":

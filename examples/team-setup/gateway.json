@@ -1,0 +1,22 @@
+{
+  "name": "gateway",
+  "inputs": {
+    "token": {"ask": "LLM gateway token", "secret": true, "file": true}
+  },
+  "settings": {
+    "claude": {
+      "env": {"ANTHROPIC_BASE_URL": "https://llm-gateway.example.com/anthropic"},
+      "apiKeyHelper": "cat {token}"
+    },
+    "codex": {
+      "model_provider": "gateway",
+      "model_providers": {
+        "gateway": {
+          "name": "LLM gateway",
+          "base_url": "https://llm-gateway.example.com/openai/v1",
+          "auth": {"command": "cat", "args": ["{token}"]}
+        }
+      }
+    }
+  }
+}

@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "harness-hooks"
-version = "0.1.0"
-description = "Installs the hooks that a config file lists into Claude Code and Codex, and removes them"
+version = "0.2.0"
+description = "Install and remove Claude Code and Codex hooks and settings from config files"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Alexei Pertsev"}]
 requires-python = ">=3.9"
-dependencies = []
-keywords = ["claude-code", "codex", "hooks"]
+dependencies = ["tomlkit>=0.13"]
+keywords = ["claude-code", "codex", "hooks", "settings"]
 classifiers = [
   "Environment :: Console",
   "Operating System :: MacOS",
