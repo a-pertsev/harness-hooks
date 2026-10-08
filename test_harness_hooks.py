@@ -7,10 +7,10 @@ import sys
 import tempfile
 import unittest
 
-TOOL = Path(__file__).with_name("agent_hooks.py")
+TOOL = Path(__file__).with_name("harness_hooks.py")
 
 
-class AgentHooksTest(unittest.TestCase):
+class HarnessHooksTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = root = Path(self.tmp.name).resolve()
@@ -21,7 +21,7 @@ class AgentHooksTest(unittest.TestCase):
         script = self.tools / "log.sh"
         script.write_text('#!/bin/sh\necho "$@" >> "$(dirname "$0")/log"\n')
         script.chmod(0o755)
-        self.config = self.tools / "agent-hooks.json"
+        self.config = self.tools / "harness-hooks.json"
         self.write_config({
             "name": "demo",
             "hooks": {"Stop": [{"command": "{dir}/log.sh {agent} Stop", "timeout": 5}]},
@@ -50,12 +50,12 @@ class AgentHooksTest(unittest.TestCase):
         return log.read_text().splitlines()[-1]
 
     def copy_dir(self, agent):
-        return self.root / agent / "agent-hooks" / "demo"
+        return self.root / agent / "harness-hooks" / "demo"
 
     def write_copied_config(self, files):
         self.write_config({"name": "demo", "files": files, "hooks": {"Stop": [{"command": "{dir}/log.sh {agent} Stop"}]}})
 
-    def test_install_adds_shared_and_agent_hooks_that_run(self):
+    def test_install_adds_shared_and_harness_hooks_that_run(self):
         self.run_tool("install", str(self.config))
 
         log = self.tools / "log"
@@ -171,7 +171,7 @@ class AgentHooksTest(unittest.TestCase):
 
     def test_name_that_leads_out_of_its_folder_is_refused(self):
         # With this folder present, the copy folder of a name ".." is the agent's whole home.
-        (self.root / "claude" / "agent-hooks").mkdir(parents=True)
+        (self.root / "claude" / "harness-hooks").mkdir(parents=True)
         self.claude_file.write_text("{}")
         self.write_config({"name": ".."})
 

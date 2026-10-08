@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Installs the hooks that a config file lists into Claude Code and Codex, and removes them.
 
-Usage: agent-hooks install|remove CONFIG [--project] [--editable] [--agent claude|codex]
+Usage: harness-hooks install|remove CONFIG [--project] [--editable] [--agent claude|codex]
 """
 
 import argparse
@@ -134,12 +134,12 @@ def main():
     project = git_root(path.parent) if args.project else None
     copying = args.action == "install" and bool(files) and not args.editable and not project
     # Marks every installed command, so remove finds it even after the config changed.
-    tag = f" # agent-hooks: {name}"
+    tag = f" # harness-hooks: {name}"
     folder = config_dir(path.parent, project)
     for agent in [args.agent] if args.agent else AGENTS:
         target = hook_file(agent, project)
         # Next to the agent's own settings, so the hooks keep working after the config's folder moves.
-        copy_dir = target.parent / "agent-hooks" / name
+        copy_dir = target.parent / "harness-hooks" / name
         if copying:
             copy(path.parent, files, copy_dir)
             print(f"{agent}: copied {len(files)} files to {copy_dir}")

@@ -3,15 +3,28 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-hooks"
+name = "harness-hooks"
 version = "0.1.0"
 description = "Installs the hooks that a config file lists into Claude Code and Codex, and removes them"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Alexei Pertsev"}]
 requires-python = ">=3.9"
 dependencies = []
+keywords = ["claude-code", "codex", "hooks"]
+classifiers = [
+  "Environment :: Console",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/a-pertsev/harness-hooks"
 
 [project.scripts]
-agent-hooks = "agent_hooks:main"
+harness-hooks = "harness_hooks:main"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["agent_hooks.py"]
+only-include = ["harness_hooks.py"]
